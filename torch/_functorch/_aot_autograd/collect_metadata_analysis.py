@@ -75,6 +75,7 @@ def run_functionalized_fw_and_collect_metadata(
     # TODO: refactor to kill this flag
     is_train: bool = False,
     requires_subclass_dispatch: bool = False,
+    pre_dispatch: bool = False,
 ) -> Callable[..., ViewAndMutationMeta]:
     memo: Dict[Tensor, Tensor] = {}
 
@@ -96,8 +97,6 @@ def run_functionalized_fw_and_collect_metadata(
         input_info: List[InputAliasInfo] = []
         output_info: List[OutputAliasInfo] = []
 
-        flat_f_args = pytree.tree_map(_to_fun, flat_args)
-
         prior_grad_enabled = torch.is_grad_enabled()
         prior_autocast_states = _get_autocast_states()
 
@@ -105,8 +104,9 @@ def run_functionalized_fw_and_collect_metadata(
         disable_above = torch._C._ExcludeDispatchKeyGuard(
             torch._C.DispatchKeySet(torch._C.DispatchKey.Functionalize)
         )
-        with disable_above, FunctionalTensorMode():
+        with disable_above, FunctionalTensorMode(pre_dispatch=pre_dispatch):
             # precondition: The passed in function already handles unflattening inputs + flattening outputs
+            flat_f_args = pytree.tree_map(_to_fun, flat_args)
             flat_f_outs = f(*flat_f_args)
 
         if prior_autocast_states != _get_autocast_states():
