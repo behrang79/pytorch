@@ -1229,6 +1229,9 @@ std::string ProcessGroupNCCL::getNCCLWatchdogDebugInfo() {
 
 void ProcessGroupNCCL::workCleanupLoop() {
   bool done = false;
+  lastWorkListUpdateTime_ = std::chrono::steady_clock::now();
+  auto lastTimePollStore = std::chrono::steady_clock::now();
+  c10::optional<std::thread> dumpingDebugInfo;
 
   std::list<ProcessGroupNCCL::WorkNCCL> completedWorkList;
   while (!done || !terminateProcessGroup_.load()) {
@@ -1241,6 +1244,24 @@ void ProcessGroupNCCL::workCleanupLoop() {
         [&]() -> bool { return terminateProcessGroup_.load(); });
     // Bump up heart beat by one.
     heartbeat_++;
+
+    // poll store to see if some ranks have flagged a timeout when
+    // we haven't polled for `heartbeat_timeout` seconds and there haven't
+    // any work added or removed for `watchdog_timeout` seconds.
+    if (dumpOnTimeout_) {
+      auto currentTimepoint = std::chrono::steady_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(
+              currentTimepoint - lastWorkListUpdateTime_) >=
+              std::chrono::milliseconds(kWatchdogThreadSleepMillis) &&
+          std::chrono::duration_cast<std::chrono::seconds>(
+              currentTimepoint - lastTimePollStore) >=
+              std::chrono::seconds(heartbeatTimeoutInSec_)) {
+        lastTimePollStore = currentTimepoint;
+        if (store_->check({std::string(TIMEOUT_DUMP)})) {
+          dumpingDebugInfo = tryWriteDebugInfo();
+        }
+      }
+    }
 
     for (auto it = workMetaList_.begin(); it != workMetaList_.end();
          /* no increment */) {
@@ -1265,9 +1286,10 @@ void ProcessGroupNCCL::workCleanupLoop() {
               // Set shutdown mode, so the heartbeat monitor thread will not
               // abort process immediately.
               collectiveDebugInfoMode_.store(true);
+              std::vector<uint8_t> vec(1);
+              store_->set(std::string(TIMEOUT_DUMP), vec);
             }
 
-            c10::optional<std::thread> dumpingDebugInfo;
             if (dumpOnTimeout_) {
               // Store debug info to storage. (By default to local disk)
               dumpingDebugInfo = tryWriteDebugInfo();
@@ -1328,6 +1350,7 @@ void ProcessGroupNCCL::workCleanupLoop() {
           completedWorkListCV_.notify_one();
         } else {
           it = workMetaList_.erase(it);
+          lastWorkListUpdateTime_ = std::chrono::steady_clock::now();
         }
         at::cuda::CUDAGraph::dec_pending_event_queries();
       } else {
@@ -1998,6 +2021,7 @@ void ProcessGroupNCCL::workEnqueue(
     // needs to be destructed in user thread. Otherwise will
     // get deadlock. Here we enqueue work without outputs_.
     workMetaList_.emplace_back(*work);
+    lastWorkListUpdateTime_ = std::chrono::steady_clock::now();
   }
 }
 
