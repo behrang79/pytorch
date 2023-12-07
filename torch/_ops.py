@@ -153,8 +153,7 @@ class OperatorBase:
             return fn(_CppFunctionalizeAPI(), *args, **kwargs)
 
         def functionalize_dispatch_mode_fn(mode, *args, **kwargs):
-            # Mode is unused (there's a global FunctionalTensorMode that we can access)
-            return fn(_PythonFunctionalizeAPI(), *args, **kwargs)
+            return fn(_PythonFunctionalizeAPI(mode), *args, **kwargs)
 
         def functionalize_functorch_fn(interpreter, *args, **kwargs):
             return fn(_FunctorchFunctionalizeAPI(interpreter), *args, **kwargs)
@@ -353,7 +352,10 @@ class HigherOrderOperator(OperatorBase):
 
         # This can current fail due to backend fallbacks.  You just have to
         # register them by hand for HigherOrderOperator.
-        assert final_key in self.py_kernels, f"{dispatch_key} -> {final_key}"
+        try:
+            assert final_key in self.py_kernels, f"{dispatch_key} -> {final_key}"
+        except:
+            breakpoint()
         self._dispatch_cache[dispatch_key] = self.py_kernels[final_key]
         kernel = self.py_kernels[final_key]
         # It's illegal to register DispatchKey to py_kernels, since there's no
@@ -455,6 +457,7 @@ def unset_mode_pre_dispatch(mode_key):
     slot = _get_pre_dispatch_slot(mode_key)
     current_mode = current_mode_stack_pre_dispatch[slot]
     mode_stack_per_key()[torch._C.DispatchKey.PreDispatch][slot] = None
+    print("UNSET: ", mode_key)
     return current_mode
 
 
@@ -467,6 +470,7 @@ def _set_mode_pre_dispatch(mode):
     slot = _get_pre_dispatch_slot(mode_key)
     current_mode = mode_stack_per_key()[torch._C.DispatchKey.PreDispatch][slot]
     assert current_mode is None
+    f = _len_torch_dispatch_stack_pre_dispatch() == 0
     mode_stack_per_key()[torch._C.DispatchKey.PreDispatch][slot] = mode
 
 
